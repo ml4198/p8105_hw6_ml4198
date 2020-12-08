@@ -1,0 +1,84 @@
+---
+title: "p8105_hw6_ml4198"
+author: "Matthew Lawlor"
+date: "12/8/2020"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+
+library(tidyverse)
+library(modelr)
+```
+
+## Problem 1
+
+### Read and tidy
+
+```{r}
+homicide_df = read.csv("./data/homicide-data.csv") %>% 
+  janitor::clean_names() %>% 
+  filter(city != "Dallas", city != "Phoenix", city != "Kansas City", city != "Tulsa", victim_race %in% c("White", "Black")) %>% 
+  mutate(
+    city_state = paste(city, state, sep = ", "),
+    resolved = as.numeric(disposition == "Closed by arrest"),
+    victim_age = as.numeric(victim_age),
+    victim_race = fct_relevel(victim_race, "White")
+  ) %>% 
+  select(resolved, city_state, victim_age, victim_sex, victim_race)
+```
+
+### Fit logistic regression model
+
+```{r}
+fit_baltimore =
+  homicide_df %>% 
+  filter(city_state == "Baltimore, MD") %>% 
+  glm(resolved ~ victim_age + victim_race + victim_sex, data = ., family = binomial())
+```
+
+Now tidy
+
+```{r}
+fit_baltimore %>% 
+  broom::tidy() %>% 
+  mutate(OR = exp(estimate)) %>% 
+  select(term, log_OR = estimate, OR, p.value) %>% 
+  knitr::kable(digits = 3)
+```
+
+Adjusted OR for case resolved in black v white victims is 0.431.
+
+### Regress all cities
+
+```{r}
+fit_all =
+  homicide_df %>% 
+  nest(data = -city_state) %>% 
+  mutate(
+    model = map(.x = data, ~glm(resolved ~ victim_age + victim_race + victim_sex, data = .x, family = binomial())),
+    results = map(model, broom::tidy)
+  ) %>% 
+  unnest(results) %>%
+  filter(term == "victim_raceBlack") %>% 
+  mutate(
+    OR = exp(estimate),
+    ci_lower = exp(estimate - std.error),
+    ci_upper = exp(estimate + std.error)
+  ) %>%  
+  select(city_state, OR, ci_lower, ci_upper)
+```
+
+then plot
+
+```{r}
+fit_all %>% 
+  mutate(city_state = fct_reorder(city_state, OR)) %>% 
+  ggplot(aes(x = OR, y = city_state)) +
+  geom_vline(aes(xintercept = 1)) +
+  geom_errorbarh(aes(xmax = ci_upper, xmin = ci_lower), size = .5, height = .2, color = "gray50") +
+  geom_point(color = "orange")
+```
+
+This is a plot of OR +/- CI for resolved cases for black vs white victims. There is variation across cities for odds of resolved case regressing by race. Unfortunately, many cities lie well below OR 1 suggesting homicides with black victims are less likely to be solved.
