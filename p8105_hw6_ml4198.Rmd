@@ -187,3 +187,98 @@ cv_df %>%
 ```
 
 After visual inspection and stepwise linear regression prior to selection of linear regression model, there seems to be no improvement over the main effects model in terms of RMSE. The interactions model has a lower mean RMSE and a narrower distribution of RMSE, suggesting this model is superior in predictive capcity to the other two.
+
+## Problem 3
+
+Import data
+
+```{r}
+weather_df = 
+  rnoaa::meteo_pull_monitors(
+    c("USW00094728"),
+    var = c("PRCP", "TMIN", "TMAX"), 
+    date_min = "2017-01-01",
+    date_max = "2017-12-31") %>%
+  mutate(
+    name = recode(id, USW00094728 = "CentralPark_NY"),
+    tmin = tmin / 10,
+    tmax = tmax / 10) %>%
+  select(name, id, everything())
+```
+
+Inspect linear regression model
+
+```{r}
+
+weather_fit = lm(tmax ~ tmin, data = weather_df)
+
+weather_fit %>% broom::glance()
+weather_fit %>% broom::tidy()
+```
+
+Bootstrap with `modelr`
+
+First r squared
+
+```{r}
+bs_rsquared = 
+  weather_df %>% 
+  bootstrap(n = 5000) %>% 
+  mutate(
+    models = map(.x = strap, ~lm(tmax ~ tmin, data = .x)),
+    glance_results = map(models, broom::glance)
+  ) %>% 
+  select(-strap, -models) %>% 
+  unnest(glance_results) %>% 
+  select(.id, r.squared)
+  
+bs_rsquared %>% 
+  ggplot(aes(x = r.squared)) +
+  geom_density()
+
+bs_rsquared %>% 
+  summarize(
+    mean_rsquared = mean(r.squared),
+    ci_lower = quantile(r.squared, 0.025),
+    ci_upper = quantile(r.squared, 0.975)
+  ) %>% 
+  knitr::kable()
+```
+
+There is a normal distribution of R squared around mean 0.91 in the bootstrap model.
+
+Then product intercept and slope
+
+```{r}
+bs_betas = 
+  weather_df %>% 
+  bootstrap(n = 5000) %>% 
+  mutate(
+    models = map(.x = strap, ~lm(tmax ~ tmin, data = .x)),
+    tidy_results = map(models, broom::tidy)
+  ) %>% 
+  select(-strap, -models) %>% 
+  unnest(tidy_results) %>% 
+  select(-std.error, -statistic, -p.value) %>% 
+  pivot_wider(
+    names_from = "term",
+    values_from = "estimate"
+  ) %>% 
+  mutate(
+    log_slopes = log(`(Intercept)` * tmin)
+  )
+
+bs_betas %>% 
+  ggplot(aes(x = log_slopes)) +
+  geom_density()
+
+bs_betas %>% 
+  summarize(
+    mean_log_slopes = mean(log_slopes),
+    ci_lower = quantile(log_slopes, 0.025),
+    ci_upper = quantile(log_slopes, 0.975)
+  ) %>% 
+  knitr::kable()
+```
+
+There is a normal distribution of log(β̂ 0∗β̂ 1) around mean 2.01 in the bootstrap model.
