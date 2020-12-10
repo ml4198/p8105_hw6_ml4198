@@ -82,3 +82,108 @@ fit_all %>%
 ```
 
 This is a plot of OR +/- CI for resolved cases for black vs white victims. There is variation across cities for odds of resolved case regressing by race. Unfortunately, many cities lie well below OR 1 suggesting homicides with black victims are less likely to be solved.
+
+## Problem 2
+
+Read and tidy
+
+```{r}
+birthweight_df = read.csv("./data/birthweight.csv") %>% 
+  janitor::clean_names() %>% 
+  drop_na() %>% 
+  mutate(
+    babysex = as_factor(babysex),
+    frace = as_factor(frace),
+    malform = as_factor(malform),
+    mrace = as_factor(mrace),
+  )
+```
+
+Heatmap of numeric variables
+
+```{r}
+birthweight_df %>% 
+  select(-babysex, -frace, -malform, -mrace) %>% 
+  cor() %>% 
+  round(2) %>% 
+  reshape2::melt() %>% 
+  ggplot(aes(x = Var1, y = Var2, fill = value)) +
+  geom_tile() +
+  theme(axis.text.x = element_text(angle = 90, vjust = 0.5, hjust=1))
+```
+
+Stepwise linear regression
+
+```{r}
+fit_lm = lm(bwt ~ ., data = birthweight_df)
+fit_step = MASS::stepAIC(fit_lm, direction = "both", trace = FALSE) %>% 
+  broom::tidy()
+```
+
+Linear regression model incorporating select predictors based on review of above
+
+```{r}
+fit_lm = lm(bwt ~ bhead + blength + babysex + mheight + delwt + ppwt + gaweeks + mrace + smoken, data=birthweight_df) 
+
+fit_lm %>% 
+  broom::tidy()
+```
+
+Plot residuals. It appears the model over-predicts in a medium birthweight range (2000-3000g) and under-predicts in a high birth weight range (3000-4000g). It additionally under predicts below 2000g but the number of cases here is limited.
+
+```{r}
+birthweight_df %>% 
+  add_residuals(fit_lm) %>% 
+  ggplot(aes(x = bwt, y = resid)) +
+  geom_point()
+```
+
+Now compare fit to additional linear models
+
+```{r}
+cv_df = 
+  crossv_mc(birthweight_df, 100) %>% 
+  mutate(
+    fit_mod = map(train, ~lm(bwt ~ blength + gaweeks, data = .x)),
+    main_effects_mod = map(train, ~lm(bwt ~ blength + gaweeks, data = .x)),
+    interactions_mod = map(train, ~lm(bwt ~ bhead + blength + babysex + bhead * blength + bhead * babysex + blength * babysex + bhead * blength * babysex, data = .x))
+    ) %>% 
+  mutate(
+    rmse_fit = map2_dbl(fit_mod, test, ~rmse(model = .x, data =.y)),
+    rmse_main_effects = map2_dbl(main_effects_mod, test, ~rmse(model = .x, data = .y)),
+    rmse_interactions = map2_dbl(interactions_mod, test, ~rmse(model = .x, data= .y))
+  )
+```
+
+Visualize distribution of RMSEs
+
+```{r}
+cv_df %>%
+  select(starts_with("rmse")) %>% 
+  pivot_longer(
+    everything(),
+    names_to = "model", 
+    values_to = "rmse",
+    names_prefix = "rmse_") %>% 
+  mutate(model = fct_inorder(model)) %>% 
+  ggplot(aes(x = model, y = rmse)) + 
+  geom_violin()
+```
+
+```{r}
+cv_df %>% 
+  select(starts_with("rmse")) %>% 
+  pivot_longer(
+    everything(),
+    names_to = "model", 
+    values_to = "rmse",
+    names_prefix = "rmse_") %>%
+  group_by(model) %>% 
+  summarize(
+    mean_rmse = mean(rmse),
+    sd_rmse = sd(rmse)
+  ) %>% 
+  knitr::kable(digits=2)
+```
+
+After visual inspection and stepwise linear regression prior to selection of linear regression model, there seems to be no improvement over the main effects model in terms of RMSE. The interactions model has a lower mean RMSE and a narrower distribution of RMSE, suggesting this model is superior in predictive capcity to the other two.
